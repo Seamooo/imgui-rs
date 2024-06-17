@@ -83,6 +83,11 @@ fn no_current_context() -> bool {
     let ctx = unsafe { sys::igGetCurrentContext() };
     ctx.is_null()
 }
+fn new_ui() -> Ui {
+    Ui {
+        buffer: UnsafeCell::new(crate::string::UiBuffer::new(1024)),
+    }
+}
 
 impl Context {
     /// Creates a new active imgui-rs context.
@@ -351,15 +356,49 @@ impl SuspendedContext {
             renderer_viewport_ctx: Box::new(UnsafeCell::new(
                 crate::RendererViewportContext::dummy(),
             )),
-            ui: Ui {
-                buffer: UnsafeCell::new(crate::string::UiBuffer::new(1024)),
-            },
+            ui: new_ui(),
         };
         if ctx.is_current_context() {
             // Oops, the context was activated -> deactivate
             clear_current_context();
         }
         SuspendedContext(ctx)
+    }
+}
+
+/// Creates a context object for a context managed externally
+///
+/// The main use case for this is when using imgui created across an ABI boundary
+pub struct ExternalContext {
+    raw: *mut sys::ImGuiContext,
+    ui: Ui,
+}
+
+impl ExternalContext {
+    /// **Safety requirements**
+    ///
+    /// The pointer must be to an already created imgui context
+    pub unsafe fn from_raw(raw: *mut sys::ImGuiContext) -> Self {
+        let _guard = CTX_MUTEX.lock();
+        assert!(
+            !no_current_context(),
+            "A new active context cannot be created, because another one already exists"
+        );
+        sys::igSetCurrentContext(raw);
+        Self { raw, ui: new_ui() }
+    }
+    /// **Safety requirements**
+    ///
+    /// [`igNewFrame`] must have been called externally prior to calling this
+    pub unsafe fn external_new_frame(&mut self) -> &mut Ui {
+        &mut self.ui
+    }
+}
+
+impl Drop for ExternalContext {
+    fn drop(&mut self) {
+        let _guard = CTX_MUTEX.lock();
+        clear_current_context();
     }
 }
 
